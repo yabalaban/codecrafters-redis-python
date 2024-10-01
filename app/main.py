@@ -129,7 +129,7 @@ def echo_cmd(dt, writer):
 db: dict[str, tuple[str, int]] = {}
 
 def set_cmd(dt: RespArray, writer: asyncio.StreamWriter):
-    expiration = None if len(dt.items) == 3 else round(time.time() * 1000) + dt.items[4].value
+    expiration = None if len(dt.items) == 3 else round(time.time() * 1000) + int(dt.items[4].value)
     db[dt.items[1].value] = (dt.items[2].value, expiration)
     writer.write(RespString('OK').encode())
 
