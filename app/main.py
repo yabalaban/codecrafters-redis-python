@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 
 def _write_chunks(chunks: list[bytearray], prefix, suffix=b'') -> bytearray:
@@ -35,15 +36,36 @@ class RespString:
 
     def __repr__(self):
         return f"RespString({self.value=})"
-    
 
-class RespBulkString:
-    def __init__(self, value: str):
+
+class RespInteger:
+    def __init__(self, value: int):
         self.value = value
 
     def encode(self) -> bytearray:
-        data = self.value.encode()
-        return _write_chunks([str(len(data)).encode(), data], b'$', b'\r\n')
+        return _write_chunks([str(self.value).encode()], b':', b'\r\n')
+
+    @staticmethod
+    def decode(data: bytearray, offset: int) -> tuple[any, int]:
+        # skip ':' 
+        offset += 1 
+        value, offset = _parse_chunk(data, offset)
+        return RespString(int(value.decode())), offset
+
+    def __repr__(self):
+        return f"RespInteger({self.value=})"
+    
+
+class RespBulkString:
+    def __init__(self, value: str | None):
+        self.value = value
+
+    def encode(self) -> bytearray:
+        if self.value:
+            data = self.value.encode()
+            return _write_chunks([str(len(data)).encode(), data], b'$', b'\r\n')
+        else:
+            return b'$-1\r\n'
 
     @staticmethod
     def decode(data: bytearray, offset: int) -> tuple[any, int]:
@@ -88,6 +110,7 @@ resp = {
     ord('+'): RespString,
     ord('$'): RespBulkString,
     ord('*'): RespArray,
+    ord(':'): RespInteger,
 }
 
 
@@ -103,9 +126,29 @@ def echo_cmd(dt, writer):
     writer.write(dt.items[1].encode())
 
 
+db: dict[str, tuple[str, int]] = {}
+
+def set_cmd(dt: RespArray, writer: asyncio.StreamWriter):
+    expiration = None if len(dt.items) == 3 else round(time.time() * 1000) + dt.items[4].value
+    db[dt.items[1].value] = (dt.items[2].value, expiration)
+    writer.write(RespString('OK').encode())
+
+
+def get_cmd(dt: RespArray, writer: asyncio.StreamWriter):
+    now = round(time.time() * 1000)
+    k = dt.items[1].value 
+    v = db.get(k)
+    if not v or (v[1] and v[1] < now):
+        return writer.write(RespBulkString(None).encode()) 
+    else:
+        return writer.write(RespBulkString(v[0]).encode())
+
+
 cmds = {
     'PING': ping_cmd,
     'ECHO': echo_cmd,
+    'SET': set_cmd,
+    'GET': get_cmd,
 }
 
 async def client_connected(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -113,9 +156,9 @@ async def client_connected(reader: asyncio.StreamReader, writer: asyncio.StreamW
         data = await reader.read(512)
         dt, _ = decode(data, 0)
         if type(dt) is RespBulkString:
-            cmds[dt.value](dt, writer)
+            cmds[dt.value.upper()](dt, writer)
         elif type(dt) is RespArray:
-            cmds[dt.items[0].value](dt, writer)
+            cmds[dt.items[0].value.upper()](dt, writer)
 
 
 async def main(host: str, port: int):
