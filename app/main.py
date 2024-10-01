@@ -1,25 +1,29 @@
-import socket  # noqa: F401
+from abc import abstractmethod
+import asyncio
 
 
 class Command:
+    @abstractmethod
     def send(self, socket):
         pass
 
 
-class PongCommand(Command):
-    def send(self, socket):
-        socket.send(b'+PONG\r\n')
+class PongCommand():
+    def write(self, writer):
+        writer.write(b'+PONG\r\n')
 
 
-def main():
-    server_socket = socket.create_server(("localhost", 6379), reuse_port=True)
-    (sock, addr) = server_socket.accept() # wait for client
-    with sock:
-        while True: 
-            data = sock.recv(512)
-            pong = PongCommand()
-            pong.send(sock)
-    
+async def client_connected(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    while not reader.at_eof():
+        data = await reader.read(512)
+        PongCommand().write(writer)
+
+
+async def main(host: str, port: int):
+    srv = await asyncio.start_server(
+        client_connected, host, port, reuse_port=True)
+    await srv.serve_forever()
+
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main('127.0.0.1', 6379))
