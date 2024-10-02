@@ -117,7 +117,7 @@ resp = {
 }
 
 
-def decode(data: bytearray, offset: int) -> (any, int): 
+def decode(data: bytearray, offset: int) -> tuple[any, int]: 
     return resp[data[offset]].decode(data, offset)
 
 
@@ -142,9 +142,9 @@ def get_cmd(dt: RespArray, writer: asyncio.StreamWriter):
     k = dt.items[1].value 
     v = STATE.db.items.get(k)
     if not v or (v[1] and v[1] < now):
-        return writer.write(RespBulkString(None).encode()) 
+        writer.write(RespBulkString(None).encode()) 
     else:
-        return writer.write(RespBulkString(v[0]).encode())
+        writer.write(RespBulkString(v[0]).encode())
 
 
 def config_cmd(dt: RespArray, writer: asyncio.StreamWriter):
@@ -224,9 +224,9 @@ def _decode_string(data: bytearray, offset: int) -> tuple[str, int]:
 
 def _decode_timestamp(data: bytearray, offset: int) -> tuple[int, int]: 
     if data[offset] == 0xFC:
-        return int.from_bytes(data[offset + 1: offset + 9]), offset + 9
+        return int.from_bytes(data[offset + 1: offset + 9], 'little'), offset + 9
     elif data[offset] == 0xFD:
-        return int.from_bytes(data[offset + 1: offset + 5]) * 1000, offset + 5
+        return int.from_bytes(data[offset + 1: offset + 5], 'little') * 1000, offset + 5
     else:
         return 0, offset
 
@@ -266,12 +266,12 @@ class RedisDatabase:
         # size of kv with expiration
         (_, offset, _) = _decode_size(data, offset)
         items = {} 
-        for i in range(sizekv):
+        for _ in range(sizekv):
+            (ts, offset) = _decode_timestamp(data, offset)
             assert data[offset] == 0x00 # string 
             offset += 1
             (key, offset) = _decode_string(data, offset)
             (value, offset) = _decode_string(data, offset)
-            (ts, offset) = _decode_timestamp(data, offset)
             items[key] = (value, ts)
         assert data[offset] == 0xFF
         return RedisDatabase(dbfilename, rdbvb.decode(), items)
