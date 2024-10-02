@@ -1,4 +1,6 @@
+import argparse
 import asyncio
+from dataclasses import dataclass
 import time
 
 
@@ -144,11 +146,24 @@ def get_cmd(dt: RespArray, writer: asyncio.StreamWriter):
         return writer.write(RespBulkString(v[0]).encode())
 
 
+def config_cmd(dt: RespArray, writer: asyncio.StreamWriter):
+    def get(dt: RespArray, writer: asyncio):
+        value = CONFIG.dir if dt.items[2].value == 'dir' else CONFIG.dbfilename
+        writer.write(RespArray([dt.items[2], RespBulkString(value)]).encode()) 
+    
+
+    subcmds = {
+        'GET': get 
+    }
+    subcmds[dt.items[1].value.upper()](dt, writer)
+
+
 cmds = {
     'PING': ping_cmd,
     'ECHO': echo_cmd,
     'SET': set_cmd,
     'GET': get_cmd,
+    'CONFIG': config_cmd,
 }
 
 async def client_connected(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -161,7 +176,22 @@ async def client_connected(reader: asyncio.StreamReader, writer: asyncio.StreamW
             cmds[dt.items[0].value.upper()](dt, writer)
 
 
+@dataclass
+class InstanceConfiguration: 
+    dir: str | None = None
+    dbfilename: str | None = None
+
+
+CONFIG = InstanceConfiguration()
+
+
 async def main(host: str, port: int):
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dir')
+    parser.add_argument('--dbfilename')
+    args = parser.parse_args()
+    CONFIG.dir = args.dir 
+    CONFIG.dbfilename = args.dbfilename
     srv = await asyncio.start_server(
         client_connected, host, port, reuse_port=True)
     await srv.serve_forever()
