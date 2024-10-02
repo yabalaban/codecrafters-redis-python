@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 from dataclasses import dataclass
+import os
 import time
 
 
@@ -148,7 +149,7 @@ def get_cmd(dt: RespArray, writer: asyncio.StreamWriter):
 
 def config_cmd(dt: RespArray, writer: asyncio.StreamWriter):
     def get(dt: RespArray, writer: asyncio):
-        value = CONFIG.dir if dt.items[2].value == 'dir' else CONFIG.dbfilename
+        value = STATE.dir if dt.items[2].value == 'dir' else STATE.dbfilename
         writer.write(RespArray([dt.items[2], RespBulkString(value)]).encode()) 
     
 
@@ -158,12 +159,19 @@ def config_cmd(dt: RespArray, writer: asyncio.StreamWriter):
     subcmds[dt.items[1].value.upper()](dt, writer)
 
 
+def keys_cmd(dt: RespArray, writer: asyncio.StreamWriter):
+    # by default "*"
+    keys = STATE.db.items.keys() 
+    writer.write(RespArray([RespBulkString(x) for x in keys]).encode())
+
+
 cmds = {
     'PING': ping_cmd,
     'ECHO': echo_cmd,
     'SET': set_cmd,
     'GET': get_cmd,
     'CONFIG': config_cmd,
+    'KEYS': keys_cmd,
 }
 
 async def client_connected(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -176,13 +184,106 @@ async def client_connected(reader: asyncio.StreamReader, writer: asyncio.StreamW
             cmds[dt.items[0].value.upper()](dt, writer)
 
 
+def _assert_section(data: bytearray, offset: int, value: int) -> int:
+    assert data[offset] == value
+    return offset + 1
+
+
+def _decode_size(data: bytearray, offset: int) -> tuple[int, int, bool]: 
+    flag = data[offset] >> 6 
+    if flag == 0x00:
+        return int(data[offset] & 0b00111111), offset + 1, False
+    elif flag == 0x01:
+        val = (data[offset] & 0b00111111) << 8
+        val += data[offset + 1]
+        return val, offset + 2
+    elif flag == 0x02:
+        return int.from_bytes(data[offset + 1:offset + 5], 'big'), offset + 5, False 
+    elif flag == 0x03:
+        return data[offset], offset + 1, True 
+    else:
+        assert False, 'invalid size data'
+
+
+def _decode_string(data: bytearray, offset: int) -> tuple[str, int]: 
+    (l, offset, ext) = _decode_size(data, offset) 
+    if ext: 
+        if l == 0xC0:
+            l = 1 
+        elif l == 0xC1:
+            l = 2
+        elif l == 0xC2:
+            l = 4
+        elif l == 0xC3:
+            assert False, 'lzf compression is not implemented'
+        s = str(int.from_bytes(data[offset: offset + l], 'little'))     
+    else:
+        s = data[offset: offset + l].decode() 
+    return s, offset + l
+
+
+def _decode_timestamp(data: bytearray, offset: int) -> tuple[int, int]: 
+    if data[offset] == 0xFC:
+        return int.from_bytes(data[offset + 1: offset + 9]), offset + 9
+    elif data[offset] == 0xFD:
+        return int.from_bytes(data[offset + 1: offset + 5]) * 1000, offset + 5
+    else:
+        return 0, offset
+
+
+def _parse_fragment_until(data: bytearray, offset: int, value: int) -> tuple[bytearray, int]:
+    fragment = bytearray()
+    while data[offset] != value:
+        fragment.append(data[offset])
+        offset += 1
+    return fragment, offset + 1
+
+
+class RedisDatabase:
+    dbfilename: str 
+    rdbv: int 
+    items: dict[str, tuple[str | int, int]]
+
+    def __init__(self, 
+                 dbfilename: str,
+                 rdbv: int,
+                 items: dict[str, tuple[str | int, int]]):
+        self.rdbv = rdbv
+        self.dbfilename = dbfilename
+        self.items = items
+
+    @staticmethod
+    def from_bytes(dbfilename: str, data: bytearray):
+        assert data[:5] == b'REDIS'
+        offset = 5 
+        (rdbvb, offset) = _parse_fragment_until(data, offset, 0xFA)
+        # attributes
+        (_, offset) = _parse_fragment_until(data, offset, 0xFE)
+        # db idx
+        (_, offset, _) = _decode_size(data, offset)
+        offset = _assert_section(data, offset, 0xFB)
+        (sizekv, offset, _) = _decode_size(data, offset)
+        # size of kv with expiration
+        (_, offset, _) = _decode_size(data, offset)
+        items = {} 
+        for i in range(sizekv):
+            assert data[offset] == 0x00 # string 
+            offset += 1
+            (key, offset) = _decode_string(data, offset)
+            (value, offset) = _decode_string(data, offset)
+            (ts, offset) = _decode_timestamp(data, offset)
+            items[key] = (value, ts)
+        assert data[offset] == 0xFF
+        return RedisDatabase(dbfilename, rdbvb.decode(), items)
+
+
 @dataclass
-class InstanceConfiguration: 
+class InstanceState: 
     dir: str | None = None
-    dbfilename: str | None = None
+    db: RedisDatabase | None = None
 
 
-CONFIG = InstanceConfiguration()
+STATE = InstanceState()
 
 
 async def main(host: str, port: int):
@@ -190,8 +291,13 @@ async def main(host: str, port: int):
     parser.add_argument('--dir')
     parser.add_argument('--dbfilename')
     args = parser.parse_args()
-    CONFIG.dir = args.dir 
-    CONFIG.dbfilename = args.dbfilename
+    STATE.dir = args.dir
+    if args.dir and args.dbfilename and os.path.isfile(f'{args.dir}/{args.dbfilename}'):
+        with open(f'{args.dir}/{args.dbfilename}', 'rb') as f:
+            data = f.read() 
+            STATE.db = RedisDatabase.from_bytes(args.dbfilename, data)
+    else:
+        STATE.db = RedisDatabase('default', 0, '')
     srv = await asyncio.start_server(
         client_connected, host, port, reuse_port=True)
     await srv.serve_forever()
