@@ -133,7 +133,7 @@ db: dict[str, tuple[str, int]] = {}
 
 def set_cmd(dt: RespArray, writer: asyncio.StreamWriter):
     expiration = None if len(dt.items) == 3 else round(time.time() * 1000) + int(dt.items[4].value)
-    db[dt.items[1].value] = (dt.items[2].value, expiration)
+    STATE.db.items[dt.items[1].value] = (dt.items[2].value, expiration)
     writer.write(RespString('OK').encode())
 
 
@@ -297,7 +297,7 @@ async def main(host: str, port: int):
             data = f.read() 
             STATE.db = RedisDatabase.from_bytes(args.dbfilename, data)
     else:
-        STATE.db = RedisDatabase('default', 0, '')
+        STATE.db = RedisDatabase('default', 0, {})
     srv = await asyncio.start_server(
         client_connected, host, port, reuse_port=True)
     await srv.serve_forever()
