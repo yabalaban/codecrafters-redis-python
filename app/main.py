@@ -140,7 +140,7 @@ def set_cmd(dt: RespArray, writer: asyncio.StreamWriter):
 def get_cmd(dt: RespArray, writer: asyncio.StreamWriter):
     now = round(time.time() * 1000)
     k = dt.items[1].value 
-    v = db.get(k)
+    v = STATE.db.items.get(k)
     if not v or (v[1] and v[1] < now):
         return writer.write(RespBulkString(None).encode()) 
     else:
