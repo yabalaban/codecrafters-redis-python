@@ -262,14 +262,14 @@ class RedisReplicationRole(Enum):
 @dataclass
 class RedisReplication: 
     role: RedisReplicationRole
-    master_repl_id: str  | None   
+    master_replid: str  | None   
     master_repl_offset: int
     host: tuple[str, int] | None 
 
     def encode(self) -> bytearray:
         payload = f"role:{self.role.value}"
         if self.role == RedisReplicationRole.MASTER:
-            payload += f'\r\nmaster_repl_id:{self.master_repl_id}'
+            payload += f'\r\nmaster_replid:{self.master_replid}'
             payload += f'\r\nmaster_repl_offset:{self.master_repl_offset}'
         return RespBulkString(payload).encode()
 
@@ -277,7 +277,7 @@ class RedisReplication:
     def master():
         return RedisReplication(
             role=RedisReplicationRole.MASTER,
-            master_repl_id=''.join(random.choices(string.ascii_letters + string.digits, k=40)),
+            master_replid=''.join(random.choices(string.ascii_letters + string.digits, k=40)),
             master_repl_offset=0,
             host=None 
         )
@@ -286,7 +286,7 @@ class RedisReplication:
     def slave(host: tuple[str, int]):
         return RedisReplication(
             role=RedisReplicationRole.SLAVE,
-            master_repl_id=None,
+            master_replid=None,
             master_repl_offset=0,
             host=host 
         )
