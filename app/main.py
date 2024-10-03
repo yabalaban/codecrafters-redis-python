@@ -383,6 +383,11 @@ def replicate():
         RespBulkString('psync2')
     ]).encode())
     clientsocket.recv(len(RespString('OK').encode()))
+    clientsocket.send(RespArray([
+        RespBulkString('PSYNC'), 
+        RespBulkString('?'), 
+        RespBulkString('-1')
+    ]).encode())
     
     clientsocket.close()
 
