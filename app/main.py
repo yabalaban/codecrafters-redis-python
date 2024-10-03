@@ -1,7 +1,11 @@
 import argparse
 import asyncio
 from dataclasses import dataclass
+from enum import Enum
 import os
+import random
+import socket
+import string
 import time
 
 
@@ -165,6 +169,16 @@ def keys_cmd(dt: RespArray, writer: asyncio.StreamWriter):
     writer.write(RespArray([RespBulkString(x) for x in keys]).encode())
 
 
+def info_cmd(dt: RespArray, writer: asyncio.StreamWriter):
+    def replication(dt: RespArray, writer: asyncio):
+        writer.write(STATE.replication.encode()) 
+
+    subcmds = {
+        'REPLICATION': replication
+    }
+    subcmds[dt.items[1].value.upper()](dt, writer)
+        
+
 cmds = {
     'PING': ping_cmd,
     'ECHO': echo_cmd,
@@ -172,6 +186,7 @@ cmds = {
     'GET': get_cmd,
     'CONFIG': config_cmd,
     'KEYS': keys_cmd,
+    'INFO': info_cmd,
 }
 
 async def client_connected(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -239,6 +254,44 @@ def _parse_fragment_until(data: bytearray, offset: int, value: int) -> tuple[byt
     return fragment, offset + 1
 
 
+class RedisReplicationRole(Enum):
+    MASTER = "master" 
+    SLAVE = "slave"
+
+
+@dataclass
+class RedisReplication: 
+    role: RedisReplicationRole
+    master_repl_id: str  | None   
+    master_repl_offset: int
+    host: tuple[str, int] | None 
+
+    def encode(self) -> bytearray:
+        payload = f"role:{self.role.value}"
+        if self.role == RedisReplicationRole.MASTER:
+            payload += f'\r\nmaster_repl_id:{self.master_repl_id}'
+            payload += f'\r\master_repl_offset:{self.master_repl_offset}'
+        return RespBulkString(payload).encode()
+
+    @staticmethod
+    def master():
+        return RedisReplication(
+            role=RedisReplicationRole.MASTER,
+            master_repl_id=''.join(random.choices(string.ascii_letters + string.digits, k=40)),
+            master_repl_offset=0,
+            host=None 
+        )
+    
+    @staticmethod
+    def slave(host: tuple[str, int]):
+        return RedisReplication(
+            role=RedisReplicationRole.SLAVE,
+            master_repl_id=None,
+            master_repl_offset=0,
+            host=host 
+        )
+
+
 class RedisDatabase:
     dbfilename: str 
     rdbv: int 
@@ -281,15 +334,26 @@ class RedisDatabase:
 class InstanceState: 
     dir: str | None = None
     db: RedisDatabase | None = None
+    replication: RedisReplication | None = None 
 
 
 STATE = InstanceState()
 
 
-async def main(host: str, port: int):
+def replicate():
+    assert STATE.replication.role == RedisReplicationRole.SLAVE
+
+    clientsocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    clientsocket.connect(STATE.replication.host)
+    clientsocket.send(RespArray(RespBulkString('PING')))
+
+
+async def main(host: str):
     parser = argparse.ArgumentParser()
     parser.add_argument('--dir')
     parser.add_argument('--dbfilename')
+    parser.add_argument('--replicaof')
+    parser.add_argument('--port', default=6379)
     args = parser.parse_args()
     STATE.dir = args.dir
     if args.dir and args.dbfilename and os.path.isfile(f'{args.dir}/{args.dbfilename}'):
@@ -298,10 +362,16 @@ async def main(host: str, port: int):
             STATE.db = RedisDatabase.from_bytes(args.dbfilename, data)
     else:
         STATE.db = RedisDatabase('default', 0, {})
+    if args.replicaof:
+        addr, host = args.replicaof.split(' ')
+        STATE.replication = RedisReplication.slave((addr, int(host)))
+        replicate()
+    else:
+        STATE.replication = RedisReplication.master()
     srv = await asyncio.start_server(
-        client_connected, host, port, reuse_port=True)
+        client_connected, host, args.port, reuse_port=True)
     await srv.serve_forever()
 
 
 if __name__ == "__main__":
-    asyncio.run(main('127.0.0.1', 6379))
+    asyncio.run(main('127.0.0.1'))
