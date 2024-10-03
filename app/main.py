@@ -196,7 +196,7 @@ def replconf_cmd(dt: RespArray, writer: asyncio.StreamWriter):
 def psync_cmd(dt: RespArray, writer: asyncio.StreamWriter):
     # replication_id = dt.items[1].value 
     # replication_offset = dt.items[2].value
-    writer.write(RespString(f'FULLRESYNC {STATE.replication.master_replid} {STATE.replication.master_repl_offset}'))
+    writer.write(RespString(f'FULLRESYNC {STATE.replication.master_replid} {STATE.replication.master_repl_offset}').encode())
     
 
 cmds = {
