@@ -179,6 +179,28 @@ def info_cmd(dt: RespArray, writer: asyncio.StreamWriter):
     subcmds[dt.items[1].value.upper()](dt, writer)
         
 
+def replconf_cmd(dt: RespArray, writer: asyncio.StreamWriter):
+    def listening_port(dt: RespArray, writer: asyncio.StreamWriter):
+        writer.write(RespString('OK').encode())
+
+    def capa(dt: RespArray, writer: asyncio.StreamWriter):
+        writer.write(RespString('OK').encode())
+    
+    subcmds = {
+        'LISTENING-PORT': listening_port,
+        'CAPA': capa,
+    }
+    subcmds[dt.items[1].value.upper()](dt, writer)
+
+
+def psync_cmd(dt: RespArray, writer: asyncio.StreamWriter):
+    # replication_id = dt.items[1].value 
+    # replication_offset = dt.items[2].value
+    writer.write(RespString(f'FULLRESYNC {STATE.replication.master_replid} {STATE.replication.master_repl_offset}'))
+    STATE.db.
+    writer.write(RespString(f'FULLRESYNC {STATE.replication.master_replid} {STATE.replication.master_repl_offset}'))
+    
+
 cmds = {
     'PING': ping_cmd,
     'ECHO': echo_cmd,
@@ -187,6 +209,8 @@ cmds = {
     'CONFIG': config_cmd,
     'KEYS': keys_cmd,
     'INFO': info_cmd,
+    'REPLCONF': replconf_cmd,
+    'PSYNC': psync_cmd,
 }
 
 async def client_connected(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -333,6 +357,7 @@ class RedisDatabase:
 @dataclass
 class InstanceState: 
     dir: str | None = None
+    port: int | None = None 
     db: RedisDatabase | None = None
     replication: RedisReplication | None = None 
 
@@ -347,6 +372,22 @@ def replicate():
     clientsocket.connect(STATE.replication.host)
     clientsocket.send(RespArray([RespBulkString('PING')]).encode())
 
+    clientsocket.recv(len(RespBulkString('PONG').encode()))
+    clientsocket.send(RespArray([
+        RespBulkString('REPLCONF'), 
+        RespBulkString('listening-port'), 
+        RespBulkString(str(STATE.port))
+    ]).encode())
+    clientsocket.recv(len(RespString('OK').encode()))
+    clientsocket.send(RespArray([
+        RespBulkString('REPLCONF'), 
+        RespBulkString('capa'), 
+        RespBulkString('psync2')
+    ]).encode())
+    clientsocket.recv(len(RespString('OK').encode()))
+    
+    clientsocket.close()
+
 
 async def main(host: str):
     parser = argparse.ArgumentParser()
@@ -356,6 +397,7 @@ async def main(host: str):
     parser.add_argument('--port', default=6379)
     args = parser.parse_args()
     STATE.dir = args.dir
+    STATE.port = args.port
     if args.dir and args.dbfilename and os.path.isfile(f'{args.dir}/{args.dbfilename}'):
         with open(f'{args.dir}/{args.dbfilename}', 'rb') as f:
             data = f.read() 
