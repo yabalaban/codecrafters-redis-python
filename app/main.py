@@ -270,7 +270,7 @@ class RedisReplication:
         payload = f"role:{self.role.value}"
         if self.role == RedisReplicationRole.MASTER:
             payload += f'\r\nmaster_repl_id:{self.master_repl_id}'
-            payload += f'\r\master_repl_offset:{self.master_repl_offset}'
+            payload += f'\r\nmaster_repl_offset:{self.master_repl_offset}'
         return RespBulkString(payload).encode()
 
     @staticmethod
@@ -345,7 +345,7 @@ def replicate():
 
     clientsocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     clientsocket.connect(STATE.replication.host)
-    clientsocket.send(RespArray(RespBulkString('PING')))
+    clientsocket.send(RespArray([RespBulkString('PING')]).encode())
 
 
 async def main(host: str):
@@ -363,8 +363,8 @@ async def main(host: str):
     else:
         STATE.db = RedisDatabase('default', 0, {})
     if args.replicaof:
-        addr, host = args.replicaof.split(' ')
-        STATE.replication = RedisReplication.slave((addr, int(host)))
+        addr, rport = args.replicaof.split(' ')
+        STATE.replication = RedisReplication.slave((addr, int(rport)))
         replicate()
     else:
         STATE.replication = RedisReplication.master()
